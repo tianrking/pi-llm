@@ -1,0 +1,22 @@
+# systemd unit: run pillm as a service from boot, with or without the desktop.
+#
+#   sudo cp deploy/pillm.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pillm
+#
+# Adjust User, the paths and the model below first. --host 0.0.0.0 makes the server
+# reachable from the whole network, with no password: only do that on a network you trust.
+[Unit]
+Description=pillm LLM inference server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=w0x7ce
+WorkingDirectory=/home/w0x7ce/pi4-llm
+ExecStart=/home/w0x7ce/pi4-llm/pillm -m /home/w0x7ce/pi4-llm/models/qwen3.5-2b-q4_0.gguf --serve 8080 --host 0.0.0.0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
