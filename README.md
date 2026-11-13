@@ -50,7 +50,7 @@ curl localhost:8080/v1/chat/completions -d '{"messages":[{"role":"user","content
 
 ## 当前默认模型
 
-Qwen3.5-2B 的 Q4_0 GGUF 为约 1.30 GB,可在 8 GB Pi 4 上运行。初步中文短测生成约 1.22 token/s,尚未达到 10 token/s;温度、上下文和后台负载都会影响速度。仅支持文本,不执行视觉编码器或 MTP 层。完整说明见 [docs/qwen35.md](docs/qwen35.md)。
+Qwen3.5-2B 的 Q4_0 GGUF 为约 1.30 GB,可在 8 GB Pi 4 上运行。初步中文短测生成约 1.22 token/s,尚未达到 10 token/s;温度、上下文和后台负载都会影响速度。仅支持文本,不执行视觉编码器或 MTP 层。完整说明见 [docs/qwen35.md](docs/qwen35.md)。后续运算核优化的交错测速和复现方式见 [docs/performance.md](docs/performance.md)。
 
 ## 与 llama.cpp 的历史对比
 

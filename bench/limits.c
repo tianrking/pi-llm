@@ -31,12 +31,12 @@ static float pass_q4(const uint8_t *b, size_t n, const int8_t *xq, const float *
 }
 static float pass_q4x4(const uint8_t *b, size_t n, const int8_t *xq, const float *xd, const int16_t *negc) {
     size_t row = N_IN / QK * 18; float y[4], s = 0;
-    for (size_t o = 0; o + 4 * row <= n; o += 4 * row) { dot4_q4(b + o, row, xq, xd, negc, N_IN / QK, y); s += y[0] + y[3]; }
+    for (size_t o = 0; o + 4 * row <= n; o += 4 * row) { dot4_q4(b + o, row, xq, xd, negc, N_IN / QK, y, 0); s += y[0] + y[3]; }
     return s;
 }
 static float pass_q8x4(const uint8_t *b, size_t n, const int8_t *xq, const float *xd) {
     size_t row = N_IN / QK * 34; float y[4], s = 0;
-    for (size_t o = 0; o + 4 * row <= n; o += 4 * row) { dot4_q8(b + o, row, xq, xd, N_IN / QK, y); s += y[0] + y[3]; }
+    for (size_t o = 0; o + 4 * row <= n; o += 4 * row) { dot4_q8(b + o, row, xq, xd, N_IN / QK, y, 0); s += y[0] + y[3]; }
     return s;
 }
 static float pass_q8(const uint8_t *b, size_t n, const int8_t *xq, const float *xd) {

@@ -198,10 +198,10 @@ static void model_init(model *m, int n_ctx) {
 // ---------------------------------------------------------------- kernels
 // Four rows of any supported type against one activation vector.
 static inline void dot4(int type, const uint8_t *w, size_t stride, const int8_t *xq, const float *xd,
-                        const int16_t *negc, const float *xs, int nb, float *y) {
-    if (type == GGML_Q4_0) dot4_q4(w, stride, xq, xd, negc, nb, y);
-    else if (type == GGML_Q4_1) dot4_q41(w, stride, xq, xd, xs, nb, y);
-    else dot4_q8(w, stride, xq, xd, nb, y);
+                        const int16_t *negc, const float *xs, int nb, float *y, size_t pf_extra) {
+    if (type == GGML_Q4_0) dot4_q4(w, stride, xq, xd, negc, nb, y, pf_extra);
+    else if (type == GGML_Q4_1) dot4_q41(w, stride, xq, xd, xs, nb, y, pf_extra);
+    else dot4_q8(w, stride, xq, xd, nb, y, pf_extra);
 }
 
 // Y[b][n_out] = W[n_out][n_in] · X[b] for the B activation vectors last passed to
@@ -241,7 +241,7 @@ static void matvec(const model *m, wt W, int n_in, int n_out, int B, const float
     // Hybrid state must see the same accumulation order during prefill and decode.
     if (B == 1 && !m->hybrid) {
         #pragma omp parallel for schedule(static) num_threads(nt)
-        for (int r = 0; r < n_out / 4; r++) dot4(W.type, W.w + 4 * r * row, row, xq, xd, negc, xs, nb, y + 4 * r);
+        for (int r = 0; r < n_out / 4; r++) dot4(W.type, W.w + 4 * r * row, row, xq, xd, negc, xs, nb, y + 4 * r, 0);
     } else {
         #pragma omp parallel for schedule(static) num_threads(nt)
         for (int r = 0; r < n_out / 4; r++) {
@@ -253,7 +253,8 @@ static void matvec(const model *m, wt W, int n_in, int n_out, int B, const float
                     int tn = nb - t < TILE ? nb - t : TILE;
                     for (int b = 0; b < bn; b++) {
                         float part[4]; size_t o = (size_t)(b0 + b) * nb + t;
-                        dot4(W.type, w + t * bs, row, xq + o * QK, xd + o, negc + o * 8, xs + o, tn, part);
+                        // w advances by t*bs, but the flattened prefetch stream advances by 4*t*bs.
+                        dot4(W.type, w + t * bs, row, xq + o * QK, xd + o, negc + o * 8, xs + o, tn, part, (size_t)3 * t * bs);
                         acc[b] = t ? vaddq_f32(acc[b], vld1q_f32(part)) : vld1q_f32(part);
                     }
                 }

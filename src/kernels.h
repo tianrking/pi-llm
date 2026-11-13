@@ -181,7 +181,7 @@ static inline float dot_q6_q8k(const uint8_t *w, const int8_t *x, const float *x
     float sum = 0;
     for (int b = 0; b < n / 256; b++, w += 210, x += 256) {
         const int8_t *sc = (const int8_t *)w + 192;
-        int32_t acc = 0;
+        int32x4_t acc = vdupq_n_s32(0);
         for (int h = 0; h < 2; h++)
             for (int j = 0; j < 2; j++) {
                 int8x16_t q[4]; q6_unpack16(w, h, j, q);
@@ -189,10 +189,10 @@ static inline float dot_q6_q8k(const uint8_t *w, const int8_t *x, const float *x
                     int8x16_t v = vld1q_s8(x + h * 128 + j * 16 + k * 32);
                     int16x8_t prod = vmull_s8(vget_low_s8(q[k]), vget_low_s8(v));
                     prod = vmlal_high_s8(prod, q[k], v);
-                    acc += sc[h * 8 + j + 2 * k] * vaddlvq_s16(prod);
+                    acc = vmlaq_n_s32(acc, vpaddlq_s16(prod), sc[h * 8 + j + 2 * k]);
                 }
             }
-        sum += rd_f16(w + 208) * xd[b] * acc;
+        sum += rd_f16(w + 208) * xd[b] * vaddvq_s32(acc);
     }
     return sum;
 }
@@ -207,10 +207,10 @@ static inline float32x4_t scales4(const uint8_t *w0, const uint8_t *w1, const ui
 
 // y[0..3] = four consecutive Q4_0 rows (stride bytes apart) · activations.
 static inline void dot4_q4(const uint8_t *w, size_t stride, const int8_t *xq, const float *xd,
-                           const int16_t *negc, int nb, float *y) {
+                           const int16_t *negc, int nb, float *y, size_t pf_extra) {
     const uint8_t *w0 = w, *w1 = w + stride, *w2 = w1 + stride, *w3 = w2 + stride;
     const uint8x16_t m4 = vdupq_n_u8(0x0f);
-    const uint8_t *pf = w3 + stride;            // the next four rows, see PREFETCH below
+    const uint8_t *pf = w3 + stride + pf_extra;            // the next four rows, see PREFETCH below
     float32x4_t acc = vdupq_n_f32(0);
     for (int b = 0; b < nb; b++, w0 += 18, w1 += 18, w2 += 18, w3 += 18, xq += QK, negc += 8, pf += 72) {
         PREFETCH(pf); PREFETCH(pf + 36);
@@ -236,10 +236,10 @@ static inline void dot4_q4(const uint8_t *w, size_t stride, const int8_t *xq, co
 // scale d, fp16 offset m, 32 unsigned nibbles; a weight is d * nibble + m. So a block
 // contributes d * sum(nibble * x) + m * sum(x); xs[b] holds sum(x) already scaled.
 static inline void dot4_q41(const uint8_t *w, size_t stride, const int8_t *xq, const float *xd,
-                            const float *xs, int nb, float *y) {
+                            const float *xs, int nb, float *y, size_t pf_extra) {
     const uint8_t *w0 = w, *w1 = w + stride, *w2 = w1 + stride, *w3 = w2 + stride;
     const uint8x16_t m4 = vdupq_n_u8(0x0f);
-    const uint8_t *pf = w3 + stride;
+    const uint8_t *pf = w3 + stride + pf_extra;
     float32x4_t acc = vdupq_n_f32(0);
     for (int b = 0; b < nb; b++, w0 += 20, w1 += 20, w2 += 20, w3 += 20, xq += QK, pf += 80) {
         PREFETCH(pf); PREFETCH(pf + 40);
@@ -262,9 +262,9 @@ static inline void dot4_q41(const uint8_t *w, size_t stride, const int8_t *xq, c
 }
 
 // y[0..3] = four consecutive Q8_0 rows · activations.
-static inline void dot4_q8(const uint8_t *w, size_t stride, const int8_t *xq, const float *xd, int nb, float *y) {
+static inline void dot4_q8(const uint8_t *w, size_t stride, const int8_t *xq, const float *xd, int nb, float *y, size_t pf_extra) {
     const uint8_t *w0 = w, *w1 = w + stride, *w2 = w1 + stride, *w3 = w2 + stride;
-    const uint8_t *pf = w3 + stride;
+    const uint8_t *pf = w3 + stride + pf_extra;
     float32x4_t acc = vdupq_n_f32(0);
     for (int b = 0; b < nb; b++, w0 += 34, w1 += 34, w2 += 34, w3 += 34, xq += QK, pf += 136) {
         PREFETCH(pf); PREFETCH(pf + 48); PREFETCH(pf + 96);

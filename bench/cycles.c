@@ -26,8 +26,8 @@ int main(void) {
     for (int k = 0; k < 5; k++) {
         struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
         uint64_t c0 = rdc(fc), i0 = rdc(fi);
-        if (k == 0) for (int r = 0; r < reps; r++) { dot4_q4(w + (r % 4) * 2016, 504, xq, xd, negc, NB, y); sink = y[0]; }
-        if (k == 1) for (int r = 0; r < reps; r++) { dot4_q8(w + (r % 4) * 3808, 952, xq, xd, NB, y); sink = y[0]; }
+        if (k == 0) for (int r = 0; r < reps; r++) { dot4_q4(w + (r % 4) * 2016, 504, xq, xd, negc, NB, y, 0); sink = y[0]; }
+        if (k == 1) for (int r = 0; r < reps; r++) { dot4_q8(w + (r % 4) * 3808, 952, xq, xd, NB, y, 0); sink = y[0]; }
         if (k == 2) for (int r = 0; r < reps * 4; r++) sink = dot_q4(w + (r % 16) * 504, xq, xd, NB);
         if (k == 3) for (int r = 0; r < reps * 4; r++) sink = dot_q8(w + (r % 16) * 952, xq, xd, NB);
         if (k == 4) for (int r = 0; r < reps; r++) { uint8x16_t a = vdupq_n_u8(0); for (int i = 0; i < 2048; i += 16) a = veorq_u8(a, vld1q_u8(w + i)); sinku = vgetq_lane_u64(vreinterpretq_u64_u8(a), 0); }
