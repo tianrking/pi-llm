@@ -1,0 +1,14 @@
+/pillm
+/ggufdump
+/models/
+/ref/llama.cpp/
+/ref/venv/
+/ref/*.log
+*.o
+/bench/limits
+/bench/cycles
+/ref/out-*.txt
+/bench/expcheck
+
+/tests/numerics
+__pycache__/
