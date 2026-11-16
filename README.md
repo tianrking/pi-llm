@@ -39,7 +39,7 @@ make
 - 浏览器打开 `http://<地址>:8080/` 是内置的聊天页面,流式显示回答和速度。
 - `POST /v1/chat/completions` 与 OpenAI 的接口兼容,支持 `messages`、`max_tokens`、`temperature`、`top_p`、`top_k`、`seed`、`stream`。
 - `GET /v1/models`、`GET /health`。
-- 每次请求带完整对话。Qwen3.5 为正确重建递归状态而重算完整请求,`cached_tokens` 为 0;原有 qwen2/llama 复用相同前缀。
+- 每次请求带完整对话。Qwen3.5 恢复完整匹配的消息前缀检查点,再计算剩余内容;不匹配时重算。原有 qwen2/llama 复用相同 K/V 前缀。可用 `--no-prefix-cache` 关闭 HTTP 复用作对照。
 - 一次处理一个请求。没有密码,`--host 0.0.0.0` 只应在可信的网络里使用。
 
 ```
@@ -50,7 +50,7 @@ curl localhost:8080/v1/chat/completions -d '{"messages":[{"role":"user","content
 
 ## 当前默认模型
 
-Qwen3.5-2B 的 Q4_0 GGUF 为约 1.30 GB,可在 8 GB Pi 4 上运行。初步中文短测生成约 1.22 token/s,尚未达到 10 token/s;温度、上下文和后台负载都会影响速度。仅支持文本,不执行视觉编码器或 MTP 层。完整说明见 [docs/qwen35.md](docs/qwen35.md)。后续运算核优化的交错测速和复现方式见 [docs/performance.md](docs/performance.md)。
+Qwen3.5-2B 的 Q4_0 GGUF 为约 1.30 GB,可在 8 GB Pi 4 上运行。初步中文短测生成约 1.22 token/s,尚未达到 10 token/s;温度、上下文和后台负载都会影响速度。仅支持文本,不执行视觉编码器或 MTP 层。完整说明见 [docs/qwen35.md](docs/qwen35.md)。后续性能优化、首字延迟与交错测速的复现方式见 [docs/performance.md](docs/performance.md)。
 
 ## 与 llama.cpp 的历史对比
 

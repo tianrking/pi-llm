@@ -7,8 +7,8 @@
 //   POST /v1/chat/completions   messages, max_tokens, temperature, top_p, top_k, seed, stream
 //
 // Requests carry the whole conversation each time. The part that matches what is
-// already in the K/V cache is reused for qwen2/llama. Hybrid recurrent models replay
-// the full request because their state cannot be sliced at an arbitrary prefix.
+// already in the K/V cache is reused for qwen2/llama. Hybrid models restore one
+// matching message-boundary checkpoint and replay the uncached suffix.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -220,6 +220,72 @@ static int message_text(const char *v, char *out, int max) {
     return n;
 }
 
+// Keep one checkpoint before the assistant generation prefix. Later turns omit
+// the previous empty <think> prefix, so a generation-end checkpoint cannot match.
+static size_t prefix_state_size(const model *m) {
+    size_t n = 0;
+    for (int i = 0; i < m->n_layer; i++) if (m->L[i].recurrent)
+        n += (size_t)m->ssm_heads * m->ssm_dim * m->ssm_dim + (size_t)(m->conv_kernel - 1) * 3 * m->d;
+    return n;
+}
+
+static int prefix_init(session *S) {
+    if (S->prefix_state && S->prefix_tokens) return 1;
+    size_t count = prefix_state_size(&S->m);
+    if (!count) return 0;
+    float *state = malloc(count * sizeof(float));
+    int *tokens = malloc((size_t)S->m.n_ctx * sizeof(int));
+    if (!state || !tokens) { free(state); free(tokens); return 0; }
+    S->prefix_state = state; S->prefix_tokens = tokens;
+    return 1;
+}
+
+static void prefix_store(session *S) {
+    const model *m = &S->m;
+    size_t matrix = (size_t)m->ssm_heads * m->ssm_dim * m->ssm_dim;
+    size_t conv = (size_t)(m->conv_kernel - 1) * 3 * m->d;
+    float *p = S->prefix_state;
+    for (int i = 0; i < m->n_layer; i++) if (m->L[i].recurrent) {
+        memcpy(p, m->L[i].ssm_state, matrix * sizeof(float)); p += matrix;
+        memcpy(p, m->L[i].conv_state, conv * sizeof(float)); p += conv;
+    }
+    memcpy(S->prefix_tokens, S->hist, S->n * sizeof(int));
+    S->prefix_n = S->n;
+}
+
+static int prefix_restore(session *S, const int *tokens, int n) {
+    int same = S->prefix_n;
+    if (same < 1 || same > n || memcmp(tokens, S->prefix_tokens, same * sizeof(int))) return 0;
+    model *m = &S->m;
+    size_t matrix = (size_t)m->ssm_heads * m->ssm_dim * m->ssm_dim;
+    size_t conv = (size_t)(m->conv_kernel - 1) * 3 * m->d;
+    const float *p = S->prefix_state;
+    for (int i = 0; i < m->n_layer; i++) if (m->L[i].recurrent) {
+        memcpy(m->L[i].ssm_state, p, matrix * sizeof(float)); p += matrix;
+        memcpy(m->L[i].conv_state, p, conv * sizeof(float)); p += conv;
+    }
+    // No request has overwritten this K/V prefix since the checkpoint was saved.
+    memcpy(S->hist, S->prefix_tokens, same * sizeof(int));
+    S->n = S->pos = same;
+    return same;
+}
+
+static int prepare_hybrid_prompt(session *S, const int *tokens, int n) {
+    int gen[128], ng = tokenize(&S->v, S->fmt->gen, gen, 128);
+    if (S->no_prefix_cache || ng < 1 || ng >= n || memcmp(tokens + n - ng, gen, ng * sizeof(int)) || !prefix_init(S)) {
+        reset_session(S);
+        return feed(S, tokens, n) ? -1 : 0;
+    }
+    int messages = n - ng, same = prefix_restore(S, tokens, messages);
+    if (!same) reset_session(S);
+    if (messages > S->n && feed_tokens(S, tokens + S->n, messages - S->n, 0)) {
+        reset_session(S); return -1;
+    }
+    prefix_store(S);
+    if (feed(S, tokens + messages, ng)) { reset_session(S); return -1; }
+    return same;
+}
+
 static void handle_chat(session *S, int fd, const char *body, int default_max) {
     const chatfmt *f = S->fmt;
     const char *msgs = js_get(body, "messages");
@@ -268,14 +334,18 @@ static void handle_chat(session *S, int fd, const char *body, int default_max) {
     const char *seed = js_get(body, "seed");
     if (seed && *seed >= '0' && *seed <= '9') S->s.rng = strtoull(seed, 0, 10) | 1;
 
-    // Keep the part of the cache this prompt shares with the previous one. The last
-    // token is always run again, because its prediction is what generation starts from.
     int same = 0;
-    while (same < S->n && same < n - 1 && S->hist[same] == toks[same]) same++;
-    if (S->m.hybrid) { same = 0; reset_session(S); }
-    else S->n = S->pos = same;
     double t0 = now();
-    feed(S, toks + same, n - same);
+    if (S->m.hybrid) same = prepare_hybrid_prompt(S, toks, n);
+    else {
+        if (!S->no_prefix_cache)
+            while (same < S->n && same < n - 1 && S->hist[same] == toks[same]) same++;
+        S->n = S->pos = same;
+        if (feed(S, toks + same, n - same)) same = -1;
+    }
+    if (same < 0) {
+        S->s = keep; http_error(fd, 500, "could not prepare prompt"); goto done;
+    }
     double t1 = now();
 
     r.created = (long)time(0);

@@ -1,4 +1,4 @@
-# Qwen3.5-2B 运算核优化记录
+# Qwen3.5-2B 性能优化记录
 
 2026-11-13,Pi 4 / Cortex-A72,同一个已校验的 Q4_0 GGUF。基线源码树为 GitHub 提交 `d93289b`（与本地原提交 `fea517a` 文件树相同）。
 
@@ -41,3 +41,27 @@ python3 bench/compare.py /path/to/baseline/pillm ./pillm \
 工具交错运行两版,记录二进制 SHA-256、命令、完整输出、生成 token ID、生成速度、墙钟时间和 CPU 时间。token 不一致时退出失败,要求人工检查,不会只报告更快的数字。不同提示词可以通过 `--prompt` 指定。
 
 发布前仍运行 `make test`,包括独立数值检查、原架构合成模型、真实模型状态回放、分词 fixtures、HTTP 隔离和参考输出回归。默认线程保持 2/4；本轮没有证明提高线程数能稳定改善端到端速度。
+
+## 2026-11-16: 消息前缀检查点
+
+这一轮优化首个文本 token 的等待时间,生成运算核未改动。一个检查点保存在 assistant 生成前缀之前,用约 20.2 MB 保存递归/卷积状态；精确匹配 token 前缀后恢复,继续计算后缀。历史缩短、系统提示词变化或已保存前缀不匹配时会退回重算,详细状态语义见 [qwen35.md](qwen35.md)。
+
+用同一个可执行文件启动两个本机服务,其中一个加 `--no-prefix-cache`,另一个采用默认配置：
+
+```
+./pillm -m models/qwen3.5-2b-q4_0.gguf --serve 8081 --no-prefix-cache
+./pillm -m models/qwen3.5-2b-q4_0.gguf --serve 8082
+```
+
+在另一终端运行：
+
+```
+python3 bench/prefix.py http://127.0.0.1:8081 http://127.0.0.1:8082 \
+  --repeats 3 --output /path/to/prefix-results.json
+```
+
+工具先预热,随后交错重复同一个提示词,从 SSE 流收到第一个非空文本片段时记录延迟。它要求基线 `cached_tokens=0`、候选 `cached_tokens>0`,并检查所有回答文本一致；同时单独报告生成 token/s。该测试测的是完整重复前缀命中场景,不是所有多轮对话都能达到相同收益。
+
+本机三组交错短测（2026-11-16），提示词 `Reply with the word Paris.`，默认系统提示词，共 39 个输入 token，最多生成 4 token。候选每次复用 32 个消息前缀 token。首个文本 token 等待中位数从 12.78 秒降至 2.69 秒，减少约 79.0%。所有回答一致。生成 token/s 中位数分别为 1.20 和 1.35；输出很短、后台负载和温度会影响它，本轮并未修改生成内核，也不能据此推断长期生成吞吐提升。
+
+另测一组实际续聊：先问 `Reply with the word Paris.`，收到 `Paris` 后追加 `Translate Paris to Chinese.`。关闭缓存时首字 18.46 秒，复用 32 token 的检查点后 7.82 秒，减少约 57.6%；两边均回答“巴黎”。这一组的生成速度分别为 1.24 和 1.22 token/s。续聊仅测了一组，不应当作所有对话的固定提升比例。

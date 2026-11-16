@@ -139,7 +139,16 @@ static void test_model_state(const char *path) {
     for (int i = 0; i < 16; i++) assert(feed(&S, tokens + i, 1) == 0);
     compare_state(&S.m, expected);
     puts("ok    batched and single-token recurrent/conv states agree");
+    assert(prefix_init(&S)); prefix_store(&S);
+    assert(feed(&S, tokens, 1) == 0);
+    assert(prefix_restore(&S, tokens, 16) == 16 && S.n == 16 && S.pos == 16);
+    compare_state(&S.m, expected);
+    int different[16]; memcpy(different, tokens, sizeof different); different[0]++;
+    assert(prefix_restore(&S, different, 16) == 0 && S.n == 16);
+    assert(prefix_restore(&S, tokens, 15) == 0 && S.n == 16);
+    puts("ok    prefix checkpoint restores exact state and rejects changed or shorter prefixes");
     S.keep = 2; S.can_shift = 1; shift_context(&S);
+    assert(S.prefix_n == 0);
     int retained[64], n = S.n;
     memcpy(retained, S.hist, n * sizeof(int)); capture_state(&S.m, expected);
     reset_session(&S);

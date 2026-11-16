@@ -721,6 +721,8 @@ typedef struct {
     const chatfmt *fmt;
     int *hist;                      // tokens in the cache, by slot
     int n, pos;                     // slots in use; position of the next token (never decreases)
+    int no_prefix_cache, prefix_n, *prefix_tokens;
+    float *prefix_state;            // one recurrent/conv checkpoint; K/V prefix stays in place
     int keep, can_shift;            // leading slots that are never dropped; chat may drop old context
     int stop[8], n_stop;
     int hit_stop;                   // the last generate() ended on an end-of-turn token, not on the limit
@@ -735,7 +737,7 @@ typedef struct {
 static int feed(session *S, const int *toks, int n);
 
 static void reset_session(session *S) {
-    S->n = S->pos = 0;
+    S->n = S->pos = S->prefix_n = 0;
     if (S->m.hybrid) qwen35_reset(&S->m);
 }
 
@@ -758,7 +760,7 @@ static void shift_context(session *S) {
 }
 
 // Feed tokens through the model; candidates are only computed after the last one.
-static int feed(session *S, const int *toks, int n) {
+static int feed_tokens(session *S, const int *toks, int n, int want_logits) {
     int room = S->m.n_ctx - (S->can_shift ? S->keep : S->n);
     if (n < 1 || n > room) return -1;
     while (S->n + n > S->m.n_ctx) shift_context(S);
@@ -766,12 +768,14 @@ static int feed(session *S, const int *toks, int n) {
     for (int i = 0; i < n; i += BMAX) {
         int B = n - i < BMAX ? n - i : BMAX;
         memmove(S->hist + S->n, toks + i, sizeof(int) * B);
-        forward(&S->m, toks + i, B, S->n, S->pos, i + B == n);
+        forward(&S->m, toks + i, B, S->n, S->pos, want_logits && i + B == n);
         S->n += B; S->pos += B;
     }
     S->t_prompt += now() - t0; S->n_prompt += n;
     return 0;
 }
+
+static int feed(session *S, const int *toks, int n) { return feed_tokens(S, toks, n, 1); }
 
 typedef int (*emit_fn)(void *ctx, const char *bytes, int n);                // returns nonzero to stop generating
 static int emit_stdout(void *ctx, const char *b, int n) { (void)ctx; fwrite(b, 1, n, stdout); fflush(stdout); return 0; }
@@ -817,6 +821,7 @@ static void usage(void) {
         "  --exact-head score the whole vocabulary without candidate shortlisting\n"
         "  --seed N     random seed (default: from the clock)\n"
         "  --raw        -p is the full prompt text, no chat template\n"
+        "  --no-prefix-cache disable HTTP prompt-prefix reuse\n"
         "  --tokens     print token ids    --prof  print per-stage timing\n");
 }
 
@@ -850,6 +855,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--exact-head")) S.m.two_pass = 0;
         else if (!strcmp(a, "--tokens")) show_tokens = 1;
         else if (!strcmp(a, "--prof")) show_prof = 1;
+        else if (!strcmp(a, "--no-prefix-cache")) S.no_prefix_cache = 1;
         else { usage(); return 1; }
 #undef OPT
     }

@@ -60,7 +60,7 @@ j=$(curl -s -m 200 localhost:$PORT/v1/chat/completions -d "{\"messages\":[{\"rol
 check "chat completion returns valid JSON mentioning Paris" 'echo "$j" | python3 -c "import json,sys; j=json.load(sys.stdin); sys.exit(0 if \"Paris\" in j[\"choices\"][0][\"message\"][\"content\"] else 1)"'
 st=$(curl -s -m 200 localhost:$PORT/v1/chat/completions -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$Q\"}],\"max_tokens\":6,\"temperature\":0,\"stream\":true}")
 if [ "$hybrid" = 1 ]; then
-    check "streaming ends with [DONE] and rebuilds recurrent state" 'echo "$st" | grep -q "data: \[DONE\]" && echo "$st" | grep -q "\"cached_tokens\":0"'
+    check "streaming ends with [DONE] and restores a recurrent checkpoint" 'echo "$st" | grep -q "data: \[DONE\]" && echo "$st" | grep -q "\"cached_tokens\":[1-9]"'
 else
     check "streaming ends with [DONE] and reuses the cached prompt" 'echo "$st" | grep -q "data: \[DONE\]" && echo "$st" | grep -q "\"cached_tokens\":[1-9]"'
 fi

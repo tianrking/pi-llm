@@ -36,11 +36,16 @@ make
 
 分词器识别包括 `<think>` 在内的 added tokens。Unicode 15.1 的字母、数字、空白和组合标记类别表保存在 `src/unicode.h`,由 `tools/generate_unicode.py` 生成。重新生成时应使用相同 Unicode 数据版本;普通编译不需要 Python 或外部分词库。
 
-DeltaNet 状态不能像 KV 缓存一样切回任意前缀。目前的正确性优先策略是:
+DeltaNet 状态不能像 KV 缓存一样切回任意前缀。HTTP 现在保存一个可精确恢复的消息前缀检查点：
 
-- HTTP 每次请求清空卷积和递归状态,重新处理请求携带的完整对话,`cached_tokens` 返回 0。旧 qwen2/llama 的前缀缓存保留。
-- 交互对话未截断时继续复用当前状态。上下文满后保留系统提示词、丢弃旧历史,清空递归状态并重算保留下来的 token,位置从 0 开始。
-- 不保存逐 token 的完整递归状态快照,避免随上下文长度成倍增加内存。
+- 检查点在最后一条输入消息结束、assistant 生成前缀之前。下一轮会省略上一轮的空 `<think>` 前缀,所以不能直接复用上一轮生成结束时的状态。
+- 保存递归矩阵、卷积窗口和 token ID,额外约 20.2 MB。K/V 的对应前缀保留在原位置,不另复制完整 K/V 缓存。
+- 新请求只有完整匹配所保存的 token 前缀,且消息历史不短于检查点时才恢复。其余后缀重新计算,`cached_tokens` 返回实际跳过的数量。
+- 不同问题、修改系统提示词、修改更早的历史或缩短历史,不满足匹配时会清空状态并重算。只保留最近一个检查点,不会无限累积。
+- 交互对话上下文截断会使检查点失效,随后重算保留的历史。旧 qwen2/llama 的 K/V 前缀复用保留。
+- `--no-prefix-cache` 可关闭 HTTP 前缀复用作对照。检查点内存分配失败时自动退回完整重算。
+
+检查点之前的消息处理不计算未使用的输出 logits,生成前缀仍会重新计算下一 token 的预测。缓存主要缩短重复请求和多轮对话的首字等待,不会减少回答中的生成 token。首字延迟与生成 token/s 分开测量,复现方法见 [performance.md](performance.md)。
 
 本次支持范围是文本聊天和补全,不包含视觉编码器、工具调用解析、MTP 推测解码或其他 qwen35 尺寸。`--raw` 仍允许调用者提供完整文本提示词。
 
@@ -53,7 +58,7 @@ make test MODEL=/path/to/other-model.gguf # 原有架构回归
 MODEL=models/qwen3.5-2b-q4_0.gguf ref/compare.sh "你好" 2 16
 ```
 
-`tests/numerics.c` 用独立编码的 Q6_K 权重验证浮点/整数点积,并用双精度标量递归验证多步状态。分词 fixtures 来自 llama.cpp `5676dfbe01e7ebe0387913680eee0ed39bf4a363` 的 `llama_tokenize(add_special=false, parse_special=true)`,覆盖中文、emoji、组合音标、长 pre-token 和 added tokens。真实模型状态测试检查批量/逐 token 结果及截断后的重建。HTTP 测试检查 A/B/A 请求隔离、流式/非流式一致性和视觉输入拒绝。另用小型合成 GGUF 检查原有 qwen2/llama 加载和生成路径,无需重新下载旧模型。回归脚本另覆盖单线程、多线程、种子确定性、上下文截断与参考输出。
+`tests/numerics.c` 用独立编码的 Q6_K 权重验证浮点/整数点积,并用双精度标量递归验证多步状态。分词 fixtures 来自 llama.cpp `5676dfbe01e7ebe0387913680eee0ed39bf4a363` 的 `llama_tokenize(add_special=false, parse_special=true)`,覆盖中文、emoji、组合音标、长 pre-token 和 added tokens。真实模型状态测试检查批量/逐 token 结果及截断后的重建。HTTP 测试检查 A/B/A 请求隔离、流式/非流式一致性、视觉输入拒绝、多轮检查点与完整重算的对照,以及历史缩短和系统提示词变化。状态测试另检查检查点恢复的逐项一致性。另用小型合成 GGUF 检查原有 qwen2/llama 加载和生成路径,无需重新下载旧模型。回归脚本另覆盖单线程、多线程、种子确定性、上下文截断与参考输出。
 
 初步本机短测:树莓派 4,2 线程生成,中文提示词 40 token、生成 16 token,提示词约 3.07 token/s,生成约 1.22 token/s。此为满载约 84°C、桌面运行中的单次结果,不代表稳定速度或其他硬件表现,也未达到 10 token/s。
 
