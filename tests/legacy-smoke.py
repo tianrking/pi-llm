@@ -79,9 +79,16 @@ def main():
             b = subprocess.run(base + ['-t', '2', '-tb', '2'], capture_output=True, check=True, timeout=20)
             assert a.stdout == b.stdout, arch
             assert re.findall(rb'\[(\d+)\]', a.stderr) == re.findall(rb'\[(\d+)\]', b.stderr), arch
+            for output_threads in ['0', '1', '4']:
+                c = subprocess.run(base + ['-t', '2', '-tb', '2', '-to', output_threads],
+                                   capture_output=True, check=True, timeout=20)
+                assert a.stdout == c.stdout, (arch, output_threads)
+                assert re.findall(rb'\[(\d+)\]', a.stderr) == re.findall(rb'\[(\d+)\]', c.stderr), (arch, output_threads)
+            invalid = subprocess.run(base + ['-to', '-1'], capture_output=True, timeout=20)
+            assert invalid.returncode == 1, arch
             empty = subprocess.run([str(ROOT / 'pillm'), '-m', str(model), '--raw', '-p', '', '-c', '64'], capture_output=True, timeout=20)
             assert empty.returncode == 1, arch
-            print(f'ok    synthetic {arch} GGUF loads, decodes consistently and refuses an empty raw prompt', flush=True)
+            print(f'ok    synthetic {arch} GGUF loads, preserves tokens across output threads and refuses invalid/empty input', flush=True)
 
 
 if __name__ == '__main__':

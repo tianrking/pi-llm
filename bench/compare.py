@@ -11,10 +11,11 @@ import subprocess
 import time
 
 
-def run(binary, args):
+def run(binary, args, extra):
     command = [str(binary), '-m', str(args.model), '--raw', '-p', args.prompt,
                '-n', str(args.tokens), '-c', str(args.context), '-t', str(args.threads),
                '-tb', str(args.batch_threads), '--temp', '0', '--repeat', '1', '--tokens', '--prof']
+    command.extend(extra)
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.monotonic()
     proc = subprocess.run(command, capture_output=True, text=True, errors='replace', check=True, timeout=args.timeout)
@@ -43,6 +44,8 @@ def main():
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--timeout', type=float, default=240)
     parser.add_argument('--output', type=pathlib.Path)
+    parser.add_argument('--baseline-arg', action='append', default=[], help='extra baseline argument; use --baseline-arg=-to for flags')
+    parser.add_argument('--candidate-arg', action='append', default=[], help='extra candidate argument')
     args = parser.parse_args()
     if min(args.tokens, args.context, args.threads, args.batch_threads, args.repeats, args.timeout) < 1:
         parser.error('counts and timeout must be positive')
@@ -53,7 +56,7 @@ def main():
     for pair in range(args.repeats):
         order = ['baseline', 'candidate'] if pair % 2 == 0 else ['candidate', 'baseline']
         for role in order:
-            sample = run(getattr(args, role), args)
+            sample = run(getattr(args, role), args, getattr(args, role + '_arg'))
             sample['role'] = role
             rows.append(sample)
             print(f'{role}: {sample["generation_tokens_per_second"]:.2f} token/s, {sample["cpu_seconds"]:.2f} CPU s/request', flush=True)

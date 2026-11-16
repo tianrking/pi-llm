@@ -50,7 +50,8 @@ typedef struct {
     // scratch, sized for BMAX tokens at once
     float *x, *h, *q, *k, *v, *att, *o, *g, *u, *logits, *xd, *xs, *p, *rc, *rs;
     int8_t *xq; int16_t *negc;
-    int nt_gen, nt_batch;           // threads for one token (memory-bound) and for batches (CPU-bound)
+    int nt_gen, nt_batch;           // decode and prompt threads
+    int nt_output;                 // output-head override; 0 inherits nt_gen
     int two_pass;                   // output layer: shortlist with the Q4_0 embedding matrix, then exact rows
     int n_cand, cand_id[NCAND];     // the NCAND most likely next tokens ...
     float cand_logit[NCAND];        // ... and their exact logits
@@ -409,8 +410,9 @@ static void forward(model *m, const int *tokens, int B, int slot, int pos, int w
     // cost per token. When the file also has a Q4_0 copy of the same matrix, rank the
     // vocabulary with that, then compute exact logits for the NCAND best. The true top
     // 20 were always inside the approximate top 46 in testing, far inside NCAND.
-    if (m->two_pass) matvec(m, m->tok_embd, d, m->n_vocab, 1, 0, m->logits, m->n_vocab, m->nt_gen);
-    else matvec(m, m->out, d, m->n_vocab, 1, 0, m->logits, m->n_vocab, m->nt_gen);
+    int nt_output = m->nt_output ? m->nt_output : m->nt_gen;
+    if (m->two_pass) matvec(m, m->tok_embd, d, m->n_vocab, 1, 0, m->logits, m->n_vocab, nt_output);
+    else matvec(m, m->out, d, m->n_vocab, 1, 0, m->logits, m->n_vocab, nt_output);
     int n = 0, lo = 0;                                                      // lo = index of the smallest kept
     for (int i = 0; i < m->n_vocab; i++) {
         float v = m->logits[i];
@@ -815,6 +817,7 @@ static void usage(void) {
         "  -n N         max tokens per reply (default 512)\n"
         "  -c N         context size in tokens (default 4096)\n"
         "  -t N         threads while generating (default 2: two cores saturate this SoC's memory)\n"
+        "  -to N        output-head threads (default: inherit -t)\n"
         "  -tb N        threads while reading the prompt (default 4: batches are CPU-bound)\n"
         "  --temp F     temperature, 0 = greedy (default 0.7)\n"
         "  --top-k N    (default 20, max 256)    --top-p F  (default 0.8)    --repeat F  (default 1.05)\n"
@@ -829,7 +832,7 @@ static session S;
 
 int main(int argc, char **argv) {
     const char *path = 0, *prompt = 0, *sys = 0;
-    int n_predict = 512, raw = 0, show_tokens = 0, n_ctx = 4096, show_prof = 0, threads = 2, threads_batch = 4, port = 0;
+    int n_predict = 512, raw = 0, show_tokens = 0, n_ctx = 4096, show_prof = 0, threads = 2, threads_batch = 4, threads_output = 0, port = 0;
     const char *host = "127.0.0.1";
     S.s = (sampler){ .temp = 0.7f, .top_p = 0.8f, .repeat = 1.05f, .top_k = 20, .rng = 0 };
     S.m.two_pass = 1;
@@ -843,6 +846,7 @@ int main(int argc, char **argv) {
         else if (OPT("-c")) n_ctx = atoi(nx);
         else if (OPT("-t")) threads = atoi(nx);
         else if (OPT("-tb")) threads_batch = atoi(nx);
+        else if (OPT("-to")) threads_output = atoi(nx);
         else if (OPT("--serve")) port = atoi(nx);
         else if (OPT("--host")) host = nx;
         else if (OPT("--temp")) S.s.temp = atof(nx);
@@ -859,10 +863,10 @@ int main(int argc, char **argv) {
         else { usage(); return 1; }
 #undef OPT
     }
-    if (!path || n_ctx < 64 || threads < 1 || threads_batch < 1) { usage(); return 1; }
+    if (!path || n_ctx < 64 || threads < 1 || threads_batch < 1 || threads_output < 0) { usage(); return 1; }
     if (!S.s.rng) S.s.rng = (uint64_t)(now() * 1e9) | 1;
     omp_set_num_threads(threads > threads_batch ? threads : threads_batch);
-    S.m.nt_gen = threads; S.m.nt_batch = threads_batch;
+    S.m.nt_gen = threads; S.m.nt_batch = threads_batch; S.m.nt_output = threads_output;
 
     double t0 = now();
     int fd = open(path, O_RDONLY);
